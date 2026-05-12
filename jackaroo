@@ -1,0 +1,60 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
+
+const rooms = new Map();
+
+io.on('connection', (socket) => {
+  console.log('Player connected:', socket.id);
+
+  socket.on('createRoom', ({ playerName, mode }) => {
+    const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    rooms.set(roomCode, {
+      players: [{ id: socket.id, name: playerName, color: 'green' }],
+      mode,
+      gameState: { status: 'waiting', board: [], currentTurn: 0 }
+    });
+    socket.join(roomCode);
+    socket.emit('roomCreated', { roomCode });
+  });
+
+  socket.on('joinRoom', ({ roomCode, playerName }) => {
+    const room = rooms.get(roomCode);
+    if (room && room.players.length < (room.mode === '4p' ? 4 : 2)) {
+      room.players.push({ id: socket.id, name: playerName, color: room.players.length % 2 === 0 ? 'red' : 'blue' });
+      socket.join(roomCode);
+      io.to(roomCode).emit('playerJoined', room.players);
+      if (room.players.length === (room.mode === '4p' ? 4 : 2)) {
+        room.gameState.status = 'playing';
+        io.to(roomCode).emit('gameStart', room.gameState);
+      }
+    } else {
+      socket.emit('error', 'Room full or not found');
+    }
+  });
+
+  // Game moves, cards, voice, chat...
+  socket.on('playCard', (data) => {
+    const room = Array.from(rooms.values()).find(r => r.players.some(p => p.id === socket.id));
+    if (room) io.to(roomCode).emit('cardPlayed', data);
+  });
+
+  socket.on('voiceSignal', (data) => {
+    socket.to(data.roomCode).emit('voiceSignal', { ...data, from: socket.id });
+  });
+
+  socket.on('disconnect', () => {
+    // cleanup logic
+  });
+});
+
+server.listen(3001, () => console.log('Server running on port 3001'));
